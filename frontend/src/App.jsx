@@ -79,7 +79,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        Контракт: <code>{CONTRACT_ADDRESS}</code> · сеть Polygon Amoy (тестовая)
+        Контракт: <code>{CONTRACT_ADDRESS}</code> · сеть FACHAIN
       </footer>
     </div>
   );
