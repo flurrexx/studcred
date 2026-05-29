@@ -173,7 +173,7 @@ function IssueBadge({ account }) {
       const uri = await uploadMetadataToIPFS(metadata);
       setStatus("Отправка транзакции в блокчейн…");
       const contract = await getContract(true);
-      const tx = await contract.issueBadge(form.student, uri, form.category);
+      const tx = await contract.issueBadge(form.student, uri, form.category, { gasLimit: 500000 });
       await tx.wait();
       setStatus("✅ Бейдж успешно выпущен!");
       setForm({ ...form, student: "", title: "", description: "" });
