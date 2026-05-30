@@ -5,11 +5,18 @@ import {
   hasMetaMask,
   CONTRACT_ADDRESS,
 } from "./contract";
-import {
-  buildBadgeMetadata,
-  uploadMetadataToIPFS,
-  fetchMetadata,
-} from "./ipfs";
+
+// Человекочитаемые названия категорий.
+const CATEGORY_LABELS = {
+  course: "Курс",
+  event: "Мероприятие",
+  internship: "Практика/стажировка",
+  volunteering: "Волонтёрство",
+};
+
+function categoryLabel(value) {
+  return CATEGORY_LABELS[value] || value || "—";
+}
 
 export default function App() {
   const [account, setAccount] = useState(null);
@@ -88,6 +95,7 @@ export default function App() {
 // --- Вкладка: портфолио студента ---
 function Portfolio({ account }) {
   const [badges, setBadges] = useState([]);
+  const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -99,11 +107,16 @@ function Portfolio({ account }) {
       const owned = [];
       // Перебираем все выпущенные бейджи и отбираем принадлежащие студенту.
       for (let id = 0; id < total; id++) {
-        const [valid, owner_, issuer, issuedAt, category, uri] =
+        const [valid, student, issuer, issuedAt, title, category] =
           await contract.verifyBadge(id);
-        if (valid && owner_.toLowerCase() === account.toLowerCase()) {
-          const meta = await fetchMetadata(uri);
-          owned.push({ id, issuer, issuedAt: Number(issuedAt), category, meta });
+        if (valid && student.toLowerCase() === account.toLowerCase()) {
+          owned.push({
+            id,
+            issuer,
+            issuedAt: Number(issuedAt),
+            title,
+            category,
+          });
         }
       }
       setBadges(owned);
@@ -118,28 +131,51 @@ function Portfolio({ account }) {
     load();
   }, [load]);
 
-  if (!account) return <p className="hint">Подключите кошелёк, чтобы увидеть свои бейджи.</p>;
+  if (!account)
+    return <p className="hint">Подключите кошелёк, чтобы увидеть свои бейджи.</p>;
   if (loading) return <p className="hint">Загрузка бейджей…</p>;
-  if (badges.length === 0) return <p className="hint">У вас пока нет бейджей.</p>;
+  if (badges.length === 0)
+    return <p className="hint">У вас пока нет бейджей.</p>;
+
+  const shown =
+    filter === "all" ? badges : badges.filter((b) => b.category === filter);
 
   return (
-    <div className="grid">
-      {badges.map((b) => (
-        <BadgeCard key={b.id} badge={b} />
-      ))}
+    <div>
+      <div className="filters">
+        <button
+          className={filter === "all" ? "active" : ""}
+          onClick={() => setFilter("all")}
+        >
+          Все
+        </button>
+        {Object.keys(CATEGORY_LABELS).map((c) => (
+          <button
+            key={c}
+            className={filter === c ? "active" : ""}
+            onClick={() => setFilter(c)}
+          >
+            {CATEGORY_LABELS[c]}
+          </button>
+        ))}
+      </div>
+      <div className="grid">
+        {shown.map((b) => (
+          <BadgeCard key={b.id} badge={b} />
+        ))}
+      </div>
     </div>
   );
 }
 
 function BadgeCard({ badge }) {
-  const title = badge.meta?.name || `Бейдж #${badge.id}`;
   const date = new Date(badge.issuedAt * 1000).toLocaleDateString("ru-RU");
   return (
     <div className="card">
-      <div className="card-cat">{badge.category}</div>
-      <h3>{title}</h3>
-      {badge.meta?.description && <p>{badge.meta.description}</p>}
+      <div className="card-cat">{categoryLabel(badge.category)}</div>
+      <h3>{badge.title || `Бейдж #${badge.id}`}</h3>
       <div className="card-meta">
+        <span>Бейдж #{badge.id}</span>
         <span>Выдан: {date}</span>
         <span className="mono">
           Эмитент: {badge.issuer.slice(0, 6)}…{badge.issuer.slice(-4)}
@@ -154,9 +190,7 @@ function IssueBadge({ account }) {
   const [form, setForm] = useState({
     student: "",
     title: "",
-    description: "",
     category: "course",
-    issuerName: "",
   });
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -165,21 +199,23 @@ function IssueBadge({ account }) {
 
   const submit = async () => {
     if (!account) return setStatus("Сначала подключите кошелёк.");
-    if (!form.student || !form.title) return setStatus("Заполните адрес и название.");
+    if (!form.student || !form.title)
+      return setStatus("Заполните адрес и название.");
     setBusy(true);
-    setStatus("Загрузка метаданных в IPFS…");
+    setStatus("Отправка транзакции в блокчейн…");
     try {
-      const metadata = buildBadgeMetadata(form);
-      const uri = await uploadMetadataToIPFS(metadata);
-      setStatus("Отправка транзакции в блокчейн…");
       const contract = await getContract(true);
-      console.log("Contract address:", contract.target, "fragments:", contract.interface.fragments.length);
-      const tx = await contract.issueBadge(form.student, uri, form.category, { gasLimit: 1000000 });
+      const tx = await contract.issueBadge(
+        form.student,
+        form.title,
+        form.category
+      );
+      setStatus("Ожидание подтверждения сети…");
       await tx.wait();
       setStatus("✅ Бейдж успешно выпущен!");
-      setForm({ ...form, student: "", title: "", description: "" });
+      setForm({ ...form, student: "", title: "" });
     } catch (e) {
-      setStatus("Ошибка: " + (e.reason || e.message));
+      setStatus("Ошибка: " + (e.reason || e.shortMessage || e.message));
     } finally {
       setBusy(false);
     }
@@ -189,19 +225,24 @@ function IssueBadge({ account }) {
     <div className="form">
       <p className="hint">
         Выпускать бейджи может только авторизованная организация
-        (добавляется администратором контракта).
+        (добавляется администратором контракта). Данные достижения
+        записываются прямо в блокчейн.
       </p>
       <label>
         Адрес студента (кошелёк)
-        <input value={form.student} onChange={update("student")} placeholder="0x…" />
+        <input
+          value={form.student}
+          onChange={update("student")}
+          placeholder="0x…"
+        />
       </label>
       <label>
         Название достижения
-        <input value={form.title} onChange={update("title")} placeholder="Призёр олимпиады по международным финансам" />
-      </label>
-      <label>
-        Описание
-        <textarea value={form.description} onChange={update("description")} rows={3} />
+        <input
+          value={form.title}
+          onChange={update("title")}
+          placeholder="Призёр олимпиады по международным финансам"
+        />
       </label>
       <label>
         Категория
@@ -211,10 +252,6 @@ function IssueBadge({ account }) {
           <option value="internship">Практика/стажировка</option>
           <option value="volunteering">Волонтёрство</option>
         </select>
-      </label>
-      <label>
-        Название организации
-        <input value={form.issuerName} onChange={update("issuerName")} placeholder="Финуниверситет, факультет МЭО" />
       </label>
       <button onClick={submit} disabled={busy}>
         {busy ? "Выпуск…" : "Выпустить бейдж"}
@@ -235,10 +272,16 @@ function VerifyBadge() {
     setResult(null);
     try {
       const contract = await getContract(false);
-      const [valid, owner_, issuer, issuedAt, category, uri] =
+      const [valid, student, issuer, issuedAt, title, category] =
         await contract.verifyBadge(tokenId);
-      const meta = valid ? await fetchMetadata(uri) : null;
-      setResult({ valid, owner_, issuer, issuedAt: Number(issuedAt), category, meta });
+      setResult({
+        valid,
+        student,
+        issuer,
+        issuedAt: Number(issuedAt),
+        title,
+        category,
+      });
     } catch (e) {
       setResult({ error: e.message });
     } finally {
@@ -254,7 +297,11 @@ function VerifyBadge() {
       </p>
       <label>
         Номер бейджа (tokenId)
-        <input value={tokenId} onChange={(e) => setTokenId(e.target.value)} placeholder="0" />
+        <input
+          value={tokenId}
+          onChange={(e) => setTokenId(e.target.value)}
+          placeholder="0"
+        />
       </label>
       <button onClick={verify} disabled={busy || tokenId === ""}>
         {busy ? "Проверка…" : "Проверить"}
@@ -266,13 +313,14 @@ function VerifyBadge() {
           {result.valid ? (
             <>
               <strong>✅ Бейдж подлинный</strong>
-              <p>{result.meta?.name || "(без названия)"}</p>
+              <p>{result.title || "(без названия)"}</p>
               <div className="card-meta">
-                <span>Категория: {result.category}</span>
+                <span>Категория: {categoryLabel(result.category)}</span>
                 <span>
-                  Выдан: {new Date(result.issuedAt * 1000).toLocaleDateString("ru-RU")}
+                  Выдан:{" "}
+                  {new Date(result.issuedAt * 1000).toLocaleDateString("ru-RU")}
                 </span>
-                <span className="mono">Владелец: {result.owner_}</span>
+                <span className="mono">Владелец: {result.student}</span>
                 <span className="mono">Эмитент: {result.issuer}</span>
               </div>
             </>
