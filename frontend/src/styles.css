@@ -137,3 +137,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 12px;
 }
 .footer code { font-family: monospace; color: var(--text); }
+
+/* Фильтры по категориям в портфолио */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.filters button { background: var(--surface); color: var(--text); font-size: 14px; padding: 6px 12px; }
+.filters button.active { background: var(--accent); color: #08160c; }
